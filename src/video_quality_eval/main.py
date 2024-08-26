@@ -14,14 +14,6 @@ def calculate_psnr(img1, img2):
     PIXEL_MAX = 255.0
     return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
 
-def calculate_batch_psnr(batch_ref_frames, batch_dist_frames):
-    batch_ref_frames = np.array(batch_ref_frames).astype(np.float64)
-    batch_dist_frames = np.array(batch_dist_frames).astype(np.float64)
-    
-    mse = np.mean((batch_ref_frames - batch_dist_frames) ** 2, axis=(1, 2, 3))
-    psnr_values = 20 * np.log10(255.0 / np.sqrt(mse))
-    
-    return psnr_values
 
 def calculate_ssim(img1, img2):
     # Convert images to grayscale for SSIM calculation
