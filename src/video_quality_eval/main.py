@@ -8,11 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 def calculate_psnr(img1, img2):
-    mse = np.mean((img1 - img2) ** 2)
-    if mse == 0:
-        return float("inf")
-    PIXEL_MAX = 255.0
-    return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
+    return cv2.PSNR(img1, img2)
 
 
 def calculate_ssim(img1, img2):
