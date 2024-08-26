@@ -3,8 +3,8 @@ import sys
 
 import cv2
 import numpy as np
-from skimage.metrics import structural_similarity as ssim
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 
 def calculate_psnr(img1, img2):
@@ -14,9 +14,21 @@ def calculate_psnr(img1, img2):
     PIXEL_MAX = 255.0
     return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
 
+def calculate_batch_psnr(batch_ref_frames, batch_dist_frames):
+    batch_ref_frames = np.array(batch_ref_frames).astype(np.float64)
+    batch_dist_frames = np.array(batch_dist_frames).astype(np.float64)
+    
+    mse = np.mean((batch_ref_frames - batch_dist_frames) ** 2, axis=(1, 2, 3))
+    psnr_values = 20 * np.log10(255.0 / np.sqrt(mse))
+    
+    return psnr_values
 
 def calculate_ssim(img1, img2):
-    return ssim(img1, img2, multichannel=True, channel_axis=2)
+    # Convert images to grayscale for SSIM calculation
+    img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    ssim_value = cv2.quality.QualitySSIM_compute(img1_gray, img2_gray)[0]  # pyright: ignore
+    return ssim_value
 
 
 def calculate_vmaf(ref_path, dist_path):
@@ -45,33 +57,57 @@ def calculate_vmaf(ref_path, dist_path):
     return np.mean(vmaf_scores)
 
 
-def main(reference_video, distorted_video):
-    ref_cap = cv2.VideoCapture(reference_video)
-    dist_cap = cv2.VideoCapture(distorted_video)
-    length_ref = int(ref_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    length_dist = int(dist_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    assert (
-        length_ref == length_dist
-    ), "Reference and distorted videos should have the same length"
-    print(f"Reference video length: {length_ref}")
+def process_frame_pair(ref_frame, dist_frame):
+    psnr_value = calculate_psnr(ref_frame, dist_frame)
+    ssim_value = calculate_ssim(ref_frame, dist_frame)
+    return psnr_value, ssim_value
 
-    pbar = tqdm(total=length_ref)
+
+def process_batch(executor, batch_ref_frames, batch_dist_frames):
+    results = list(
+        executor.map(process_frame_pair, batch_ref_frames, batch_dist_frames)
+    )
+
+    psnr_values, ssim_values = zip(*results)
+    return psnr_values, ssim_values
+
+
+def batch_process_video(ref_video_path, dist_video_path, batch_size=5000):
+    ref_cap = cv2.VideoCapture(ref_video_path)
+    dist_cap = cv2.VideoCapture(dist_video_path)
+    ref_length = int(ref_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    dist_length = int(dist_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    assert ref_length == dist_length, "Videos must have the same number of frames"
+    pbar = tqdm(total=ref_length // batch_size)
 
     psnr_values = []
     ssim_values = []
 
-    while True:
-        ret_ref, ref_frame = ref_cap.read()
-        ret_dist, dist_frame = dist_cap.read()
-        assert ref_frame.shape == dist_frame.shape, "Frames should have the same shape"
-        if not ret_ref or not ret_dist:
-            break
-        psnr_value = calculate_psnr(ref_frame, dist_frame)
-        ssim_value = calculate_ssim(ref_frame, dist_frame)
-        print(f"PSNR: {psnr_value}, SSIM: {ssim_value}")
-        psnr_values.append(psnr_value)
-        ssim_values.append(ssim_value)
-        pbar.update(1)
+    with ThreadPoolExecutor() as executor:
+        while True:
+            batch_ref_frames = []
+            batch_dist_frames = []
+
+            for _ in range(batch_size):
+                ret_ref, ref_frame = ref_cap.read()
+                ret_dist, dist_frame = dist_cap.read()
+
+                if not ret_ref or not ret_dist:
+                    break
+
+                batch_ref_frames.append(ref_frame)
+                batch_dist_frames.append(dist_frame)
+
+            if not batch_ref_frames:
+                break
+
+            batch_psnr, batch_ssim = process_batch(
+                executor, batch_ref_frames, batch_dist_frames
+            )
+            pbar.update(1)
+
+            psnr_values.extend(batch_psnr)
+            ssim_values.extend(batch_ssim)
         pass
 
     ref_cap.release()
@@ -80,11 +116,16 @@ def main(reference_video, distorted_video):
     avg_psnr = np.mean(psnr_values)
     avg_ssim = np.mean(ssim_values)
 
-    avg_vmaf = calculate_vmaf(reference_video, distorted_video)
+    return avg_psnr, avg_ssim
 
+
+def main(reference_video, distorted_video):
+    avg_psnr, avg_ssim = batch_process_video(reference_video, distorted_video)
+
+    # avg_vmaf = calculate_vmaf(reference_video, distorted_video)
     print(f"Average PSNR: {avg_psnr}")
     print(f"Average SSIM: {avg_ssim}")
-    print(f"Average VMAF: {avg_vmaf}")
+    # print(f"Average VMAF: {avg_vmaf}")
 
 
 if __name__ == "__main__":
