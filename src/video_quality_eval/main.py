@@ -130,7 +130,7 @@ def main(reference_video, distorted_video):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python script.py <reference_video> <distorted_video>")
+        print("Usage: python main.py <reference_video> <distorted_video>")
         sys.exit(1)
 
     reference_video = sys.argv[1]
