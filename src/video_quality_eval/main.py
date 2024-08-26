@@ -1,10 +1,11 @@
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Union
 
 import cv2
 import numpy as np
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
 
 
 def calculate_psnr(img1, img2):
@@ -60,33 +61,51 @@ def process_batch(executor, batch_ref_frames, batch_dist_frames):
     return psnr_values, ssim_values
 
 
-def batch_process_video(ref_video_path, dist_video_path, batch_size=5000):
+def batch_process_video(ref_video_path, dist_video_path, batch_size, step_size):
     ref_cap = cv2.VideoCapture(ref_video_path)
     dist_cap = cv2.VideoCapture(dist_video_path)
     ref_length = int(ref_cap.get(cv2.CAP_PROP_FRAME_COUNT))
     dist_length = int(dist_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    ref_shape = (
+        int(ref_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        int(ref_cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+    )
+    dist_shape = (
+        int(dist_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        int(dist_cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+    )
     assert ref_length == dist_length, "Videos must have the same number of frames"
-    pbar = tqdm(total=ref_length // batch_size)
+    assert ref_shape == dist_shape, "Videos must have the same resolution"
 
     psnr_values = []
     ssim_values = []
 
+    current_step = 0
+
     with ThreadPoolExecutor() as executor:
+        pbar = tqdm(total=ref_length // (batch_size * (step_size - 1)))
         while True:
             batch_ref_frames = []
             batch_dist_frames = []
 
-            for _ in range(batch_size):
+            cur_size = 0
+            while True:
                 ret_ref, ref_frame = ref_cap.read()
                 ret_dist, dist_frame = dist_cap.read()
-
+                current_step += 1
+                if (current_step % step_size) != 0:
+                    continue
                 if not ret_ref or not ret_dist:
                     break
-
                 batch_ref_frames.append(ref_frame)
                 batch_dist_frames.append(dist_frame)
+                cur_size += 1
+                if cur_size == batch_size:
+                    break
+                pass
 
             if not batch_ref_frames:
+                pbar.update(1)
                 break
 
             batch_psnr, batch_ssim = process_batch(
@@ -96,6 +115,8 @@ def batch_process_video(ref_video_path, dist_video_path, batch_size=5000):
 
             psnr_values.extend(batch_psnr)
             ssim_values.extend(batch_ssim)
+            pass
+        pbar.close()
         pass
 
     ref_cap.release()
@@ -107,13 +128,24 @@ def batch_process_video(ref_video_path, dist_video_path, batch_size=5000):
     return avg_psnr, avg_ssim
 
 
-def main(reference_video, distorted_video):
-    avg_psnr, avg_ssim = batch_process_video(reference_video, distorted_video)
+def main(
+    reference_video: str,
+    distorted_video: str,
+    batch_size: int = 5000,
+    step_size: int = 3,
+) -> dict[str, Union[np.floating[Any], list[float]]]:
+    avg_psnr, avg_ssim = batch_process_video(
+        reference_video, distorted_video, batch_size=batch_size, step_size=step_size
+    )
 
     # avg_vmaf = calculate_vmaf(reference_video, distorted_video)
     print(f"Average PSNR: {avg_psnr}")
     print(f"Average SSIM: {avg_ssim}")
     # print(f"Average VMAF: {avg_vmaf}")
+    return {
+        "psnr": avg_psnr,
+        "ssim": avg_ssim,
+    }
 
 
 if __name__ == "__main__":
