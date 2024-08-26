@@ -1,0 +1,24 @@
+[project]
+name = "video_quality_eval"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "3DRX", email = "3drxkjy@gmail.com"},
+]
+dependencies = [
+    "numpy>=2.1.0",
+    "opencv-python>=4.10.0.84",
+    "scikit-image>=0.24.0",
+    "tqdm>=4.66.5",
+]
+requires-python = "==3.11.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.scripts]
+start = "python3 ./src/video_quality_eval/main.py"
+
