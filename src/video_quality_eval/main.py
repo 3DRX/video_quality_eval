@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -21,15 +22,35 @@ def calculate_ssim(img1, img2):
 
 
 def calculate_vmaf(ref_path, dist_path):
-    result = subprocess.run(
+    # Get the total number of frames in the video for the progress bar
+    probe_result = subprocess.run(
         [
-            "ffmpeg",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_frames",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+            ref_path,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    total_frames = int(probe_result.stdout.strip())
+    # Run the ffmpeg command with Popen to capture stdout in real-time
+    process = subprocess.Popen(
+        [
+            "/home/kjy/bin/ffmpeg",
             "-i",
             dist_path,
             "-i",
             ref_path,
             "-lavfi",
-            "libvmaf=model_path=vmaf_v0.6.1.pkl",
+            f"[0:v]setpts=PTS-STARTPTS[reference];[1:v]setpts=PTS-STARTPTS[distorted];[distorted][reference]libvmaf=log_fmt=xml:log_path=/dev/stdout:model=path={'/home/kjy/Documents/projects/vmaf'}/model/vmaf_v0.6.1.json:n_threads=8",
             "-f",
             "null",
             "-",
@@ -37,12 +58,37 @@ def calculate_vmaf(ref_path, dist_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        universal_newlines=True,
     )
-    output = result.stderr
+
     vmaf_scores = []
-    for line in output.splitlines():
-        if "VMAF score" in line:
-            vmaf_scores.append(float(line.split()[-1]))
+    frame_regex = re.compile(r"frame=\s*(\d+)")  # Regex to capture frame number
+
+    with tqdm(total=total_frames, desc="Processing VMAF", unit="frame") as pbar:
+        assert process.stderr is not None
+        for line in process.stderr:
+            # Capture VMAF score from the output
+            if "VMAF score" in line:
+                score = float(line.split()[-1])
+                vmaf_scores.append(score)
+                pbar.update(total_frames - pbar.n)
+                break
+            # Update progress bar based on frame number
+            elif "frame=" in line:
+                match = frame_regex.search(line)
+                if match:
+                    current_frame = int(match.group(1))
+                    pbar.update(current_frame - pbar.n)
+                    pass
+            else:
+                # print(line, end="")
+                pass
+            pass
+        pass
+
+    process.kill()
+    pbar.close()
+
     return np.mean(vmaf_scores)
 
 
@@ -83,7 +129,7 @@ def batch_process_video(ref_video_path, dist_video_path, batch_size, step_size):
     current_step = 0
 
     with ThreadPoolExecutor() as executor:
-        pbar = tqdm(total=ref_length // (batch_size * (step_size - 1)))
+        pbar = tqdm(total=ref_length // (batch_size * (step_size - 1)), desc="Processing PSNR and SSIM")
         while True:
             batch_ref_frames = []
             batch_dist_frames = []
@@ -138,13 +184,11 @@ def main(
         reference_video, distorted_video, batch_size=batch_size, step_size=step_size
     )
 
-    # avg_vmaf = calculate_vmaf(reference_video, distorted_video)
-    print(f"Average PSNR: {avg_psnr}")
-    print(f"Average SSIM: {avg_ssim}")
-    # print(f"Average VMAF: {avg_vmaf}")
+    avg_vmaf = calculate_vmaf(reference_video, distorted_video)
     return {
         "psnr": avg_psnr,
         "ssim": avg_ssim,
+        "vmaf": avg_vmaf,
     }
 
 
@@ -155,4 +199,7 @@ if __name__ == "__main__":
 
     reference_video = sys.argv[1]
     distorted_video = sys.argv[2]
-    main(reference_video, distorted_video)
+    res = main(reference_video, distorted_video)
+    print(f"Average PSNR: {res['psnr']}")
+    print(f"Average SSIM: {res['ssim']}")
+    print(f"Average VMAF: {res['vmaf']}")
